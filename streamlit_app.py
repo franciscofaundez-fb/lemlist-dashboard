@@ -251,6 +251,35 @@ def fetch_replies():
         return []
 
 @st.cache_data(ttl=300, show_spinner=False)
+def fetch_subject_stats():
+    """Trae sent/opened/replied por asunto para calcular OR y RR por subject."""
+    auth = base64.b64encode(f":{LEMLIST_KEY}".encode()).decode()
+    hdr  = {"Authorization": f"Basic {auth}", "User-Agent": "Mozilla/5.0"}
+    tag_re = re.compile(r"SO\d{3,}")
+
+    def get_acts(atype):
+        req = urllib.request.Request(
+            f"https://api.lemlist.com/api/activities?type={atype}&limit=500", headers=hdr)
+        try:
+            data = json.loads(urllib.request.urlopen(req, timeout=20).read())
+            return data if isinstance(data, list) else data.get("data", [])
+        except:
+            return []
+
+    stats = defaultdict(lambda: {"sent": 0, "opened": 0, "replied": 0})
+    for atype, key in [("emailsSent", "sent"), ("emailsOpened", "opened"), ("emailsReplied", "replied")]:
+        for act in get_acts(atype):
+            m = tag_re.search(act.get("campaignName", ""))
+            if not m or m.group(0) not in TAGS:
+                continue
+            subj = (act.get("subject") or "").strip()
+            if not subj:
+                continue
+            stats[subj][key] += 1
+
+    return dict(stats)
+
+@st.cache_data(ttl=300, show_spinner=False)
 def fetch_lemlist_data():
     auth = base64.b64encode(f":{LEMLIST_KEY}".encode()).decode()
     hdr  = {"Authorization": f"Basic {auth}", "User-Agent": "Mozilla/5.0"}
@@ -718,3 +747,104 @@ if buscar and len(buscar) >= 2:
                       {f'<div style="font-size:0.72rem;color:#8B949E;margin-bottom:4px">Asunto: <span style="color:#C9D1D9">{rep_subject}</span></div>' if rep_subject else ''}
                       {f'<div style="font-size:0.8rem;color:#C9D1D9;line-height:1.5">{rep_preview}…</div>' if rep_preview else ''}
                     </div>""", unsafe_allow_html=True)
+
+# ── Track de asuntos ──────────────────────────────────────────────────────────
+st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+st.markdown('<div class="sec-title">Track de asuntos</div>', unsafe_allow_html=True)
+
+subj_stats_raw = fetch_subject_stats()
+
+if not subj_stats_raw:
+    st.markdown('<div style="color:#8B949E;font-size:0.85rem;padding:12px 0">No hay datos de asuntos aún.</div>',
+                unsafe_allow_html=True)
+else:
+    # Top 10 por Reply Rate (mínimo 1 enviado)
+    rows = []
+    for subj, s in subj_stats_raw.items():
+        sent = s["sent"]
+        if sent == 0:
+            continue
+        opened  = s["opened"]
+        replied = s["replied"]
+        or_pct  = round(opened  / sent * 100, 1)
+        rr_pct  = round(replied / sent * 100, 1)
+        rows.append({"subj": subj, "sent": sent, "opened": opened, "replied": replied,
+                     "or_pct": or_pct, "rr_pct": rr_pct})
+
+    rows.sort(key=lambda x: x["rr_pct"], reverse=True)
+    top10 = rows[:10]
+
+    if not top10:
+        st.markdown('<div style="color:#8B949E;font-size:0.85rem;padding:12px 0">Sin datos suficientes.</div>',
+                    unsafe_allow_html=True)
+    else:
+        # Truncar labels largos para el gráfico
+        MAX_LBL = 48
+        labels  = [r["subj"][:MAX_LBL] + ("…" if len(r["subj"]) > MAX_LBL else "") for r in top10]
+        or_vals = [r["or_pct"] for r in top10]
+        rr_vals = [r["rr_pct"] for r in top10]
+
+        fig_s = go.Figure()
+        for vals, name, color in [
+            (or_vals, "Open Rate",  "#1F6FEB"),
+            (rr_vals, "Reply Rate", "#238636"),
+        ]:
+            fig_s.add_trace(go.Bar(
+                name=name, x=vals, y=labels, orientation="h",
+                marker=dict(color=color, line=dict(width=0)),
+                hovertemplate=f"<b>%{{y}}</b><br>{name}: <b>%{{x}}%</b><extra></extra>",
+                text=[f"{v}%" for v in vals],
+                textposition="outside",
+                textfont=dict(size=11, color=color, family=FONT),
+                cliponaxis=False,
+            ))
+
+        max_s = max(or_vals + rr_vals + [1])
+        chart_h = max(320, len(top10) * 52)
+
+        fig_s.update_layout(
+            plot_bgcolor=BG, paper_bgcolor=BG,
+            font=dict(family=FONT, size=11),
+            margin=dict(l=16, r=80, t=16, b=40),
+            height=chart_h,
+            barmode="group", bargap=0.35, bargroupgap=0.08,
+            showlegend=True,
+            legend=dict(
+                orientation="h", y=-0.08, x=0,
+                bgcolor="rgba(0,0,0,0)", font=dict(size=10, color="#8B949E"),
+            ),
+            hoverlabel=HOVER,
+            xaxis=dict(
+                showgrid=True, gridcolor="#1E252E", zeroline=False, showline=False,
+                range=[0, max_s * 1.4], showticklabels=False,
+            ),
+            yaxis=dict(
+                showgrid=False, showline=False, autorange="reversed",
+                tickfont=dict(color="#C9D1D9", size=12, family=FONT),
+            ),
+        )
+        st.plotly_chart(fig_s, use_container_width=True, config={"displayModeBar": False})
+
+        # Tabla resumen
+        st.markdown('<div class="sec-title" style="margin-top:4px">Detalle</div>', unsafe_allow_html=True)
+        for r in top10:
+            subj_label = r["subj"][:70] + ("…" if len(r["subj"]) > 70 else "")
+            or_color   = "#1F6FEB"
+            rr_color   = "#238636" if r["rr_pct"] >= 5 else ("#F59E0B" if r["rr_pct"] >= 1 else "#6B7280")
+            st.markdown(f"""
+            <div style="background:#161B22;border:1px solid #21262D;border-radius:8px;
+                        padding:12px 16px;margin-bottom:6px">
+              <div style="font-size:0.82rem;font-weight:600;color:#E6EDF3;margin-bottom:8px">{subj_label}</div>
+              <div style="display:flex;gap:28px;flex-wrap:wrap">
+                <div style="font-size:0.72rem"><span style="color:#8B949E">Enviados </span>
+                  <span style="color:#E6EDF3;font-weight:600">{r['sent']}</span></div>
+                <div style="font-size:0.72rem"><span style="color:#8B949E">Abrieron </span>
+                  <span style="color:#E6EDF3;font-weight:600">{r['opened']}</span></div>
+                <div style="font-size:0.72rem"><span style="color:#8B949E">Respondieron </span>
+                  <span style="color:#E6EDF3;font-weight:600">{r['replied']}</span></div>
+                <div style="font-size:0.72rem"><span style="color:#8B949E">OR </span>
+                  <span style="font-weight:700;color:{or_color}">{r['or_pct']}%</span></div>
+                <div style="font-size:0.72rem"><span style="color:#8B949E">RR </span>
+                  <span style="font-weight:700;color:{rr_color}">{r['rr_pct']}%</span></div>
+              </div>
+            </div>""", unsafe_allow_html=True)
