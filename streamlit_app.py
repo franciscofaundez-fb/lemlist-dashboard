@@ -166,6 +166,36 @@ st.markdown("""
 .lead-email  { font-size: 0.78rem; color: #8B949E; margin-top: 2px; }
 .score-pill  { display: inline-block; padding: 2px 10px; border-radius: 20px; font-size: 0.7rem; font-weight: 700; }
 
+/* ── Reply cards ── */
+.reply-card {
+  background: #0D1117; border: 1px solid #21262D; border-radius: 8px;
+  padding: 14px 16px; margin-bottom: 8px; position: relative;
+}
+.reply-card.your-turn { border-left: 3px solid #238636; }
+.reply-name    { font-size: 0.88rem; font-weight: 700; color: #E6EDF3; }
+.reply-company { font-size: 0.73rem; color: #8B949E; margin-top: 1px; }
+.reply-preview {
+  font-size: 0.8rem; color: #C9D1D9; margin-top: 10px; line-height: 1.5;
+  background: #161B22; border-radius: 6px; padding: 8px 12px;
+  border-left: 2px solid #30363D;
+}
+.ai-score-bar { background: #21262D; border-radius: 4px; height: 4px; margin-top: 8px; }
+.your-turn-badge {
+  display: inline-block; padding: 1px 8px; border-radius: 4px;
+  font-size: 0.62rem; font-weight: 700; letter-spacing: 0.05em;
+  background: rgba(34,197,94,0.12); color: #22C55E;
+  border: 1px solid rgba(34,197,94,0.25);
+}
+
+/* ── Expander styling ── */
+[data-testid="stExpander"] {
+  background: #161B22 !important; border: 1px solid #21262D !important;
+  border-radius: 10px !important;
+}
+[data-testid="stExpander"] summary {
+  color: #E6EDF3 !important; font-weight: 600 !important;
+}
+
 /* ── Tabla ── */
 [data-testid="stDataFrame"] { border-radius: 10px; overflow: hidden; }
 
@@ -182,6 +212,18 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ── Lemlist API ──────────────────────────────────────────────────────────────
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_replies():
+    auth = base64.b64encode(f":{LEMLIST_KEY}".encode()).decode()
+    hdr  = {"Authorization": f"Basic {auth}", "User-Agent": "Mozilla/5.0"}
+    req  = urllib.request.Request(
+        "https://api.lemlist.com/api/activities?type=emailsReplied&limit=100", headers=hdr)
+    try:
+        data = json.loads(urllib.request.urlopen(req, timeout=20).read())
+        return data if isinstance(data, list) else data.get("data", [])
+    except:
+        return []
+
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_lemlist_data():
     auth = base64.b64encode(f":{LEMLIST_KEY}".encode()).decode()
@@ -470,6 +512,84 @@ for col, (tag, d) in zip(st.columns(len(data_fil)), data_fil.items()):
         </div>""", unsafe_allow_html=True)
 
 st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+
+# ── Inbox: leads que respondieron ────────────────────────────────────────────
+st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+st.markdown('<div class="sec-title">Inbox — Respuestas recibidas</div>', unsafe_allow_html=True)
+
+replies_raw = fetch_replies()
+
+# Agrupar por campaña (solo clusters SO)
+replies_by_tag = defaultdict(list)
+for r in replies_raw:
+    camp = r.get("campaignName", "")
+    m = re.search(r"(SO\d{3,})", camp)
+    if m and m.group(1) in tags_sel:
+        replies_by_tag[m.group(1)].append(r)
+
+if not replies_by_tag:
+    st.markdown('<div style="color:#8B949E;font-size:0.85rem;padding:12px 0">No hay respuestas registradas aún.</div>',
+                unsafe_allow_html=True)
+else:
+    for tag in tags_sel:
+        replies = replies_by_tag.get(tag, [])
+        if not replies:
+            continue
+        your_turn = sum(1 for r in replies if not r.get("bot", False))
+        label = f"{tag} · {len(replies)} respuesta{'s' if len(replies)>1 else ''}"
+        if your_turn:
+            label += f"  ·  {your_turn} esperando respuesta"
+
+        with st.expander(label, expanded=False):
+            for r in sorted(replies, key=lambda x: x.get("createdAt",""), reverse=True):
+                nombre  = f"{r.get('leadFirstName','')} {r.get('leadLastName','')}".strip() or r.get("leadEmail","")
+                empresa = r.get("leadCompanyName", "")
+                email   = r.get("leadEmail", "")
+                preview = r.get("messagePreview", "").strip()
+                subject = r.get("subject", "")
+                fecha   = r.get("createdAt", "")[:10] if r.get("createdAt") else ""
+                ai_raw  = r.get("aiLeadInterestScore", 0) or 0
+                ai_pct  = round(ai_raw * 100)
+                is_turn = not r.get("bot", False)
+
+                if ai_raw >= 0.7:
+                    ai_color, ai_label = "#22C55E", "Muy interesado"
+                elif ai_raw >= 0.4:
+                    ai_color, ai_label = "#F59E0B", "Interesado"
+                else:
+                    ai_color, ai_label = "#6B7280", "Poco interesado"
+
+                turn_badge = '<span class="your-turn-badge">Tu turno</span>' if is_turn else ""
+                card_class = "reply-card your-turn" if is_turn else "reply-card"
+
+                st.markdown(f"""
+                <div class="{card_class}">
+                  <div style="display:flex;justify-content:space-between;align-items:flex-start">
+                    <div>
+                      <div class="reply-name">{nombre}</div>
+                      <div class="reply-company">{empresa}{' · ' + email if empresa else email}</div>
+                    </div>
+                    <div style="text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:4px">
+                      {turn_badge}
+                      <span style="font-size:0.68rem;color:#484F58">{fecha}</span>
+                    </div>
+                  </div>
+                  {f'<div style="font-size:0.7rem;color:#8B949E;margin-top:8px">Asunto: <span style="color:#C9D1D9">{subject}</span></div>' if subject else ''}
+                  {f'<div class="reply-preview">{preview}...</div>' if preview else ''}
+                  <div style="margin-top:10px;display:flex;align-items:center;gap:10px">
+                    <div style="flex:1">
+                      <div style="display:flex;justify-content:space-between;margin-bottom:3px">
+                        <span style="font-size:0.67rem;color:#8B949E">Interés IA</span>
+                        <span style="font-size:0.67rem;font-weight:700;color:{ai_color}">{ai_label} · {ai_pct}%</span>
+                      </div>
+                      <div class="ai-score-bar">
+                        <div style="height:4px;border-radius:4px;width:{ai_pct}%;background:{ai_color}"></div>
+                      </div>
+                    </div>
+                  </div>
+                </div>""", unsafe_allow_html=True)
+
+st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
 
 # ── Buscador de leads ─────────────────────────────────────────────────────────
 st.markdown('<div class="sec-title">Buscar lead</div>', unsafe_allow_html=True)
