@@ -355,6 +355,34 @@ if not data:
 
 data_fil = {k: v for k, v in data.items() if k in tags_sel}
 
+# ── Aplicar filtro de estado a los gráficos / KPIs ───────────────────────────
+def recompute(leads):
+    """Recalcula métricas para un subconjunto de leads."""
+    states = defaultdict(int)
+    for l in leads:
+        states[l.get("state","")] += 1
+    total  = len(leads)
+    bounced = states.get("emailsBounced", 0)
+    opened  = states.get("emailsOpened",  0)
+    replied = states.get("emailsReplied", 0)
+    sent    = states.get("emailsSent",    0)
+    clicked = states.get("emailsClicked", 0)
+    deliv   = total - bounced
+    def pct(n, d): return round(n/d*100,1) if d else 0
+    return dict(total=total, bounced=bounced, deliverable=deliv,
+                opened=opened, replied=replied, sent=sent, clicked=clicked,
+                or_deliverable=pct(opened,deliv), rr=pct(replied,deliv))
+
+if estado_sel == "Todos":
+    data_view = data_fil
+else:
+    data_view = {}
+    for tag, d in data_fil.items():
+        filtered_leads = [l for l in d["leads"] if l.get("state","") == estado_sel]
+        if filtered_leads:
+            m = recompute(filtered_leads)
+            data_view[tag] = {**d, **m, "leads": filtered_leads}
+
 # ── Header ────────────────────────────────────────────────────────────────────
 st.markdown(f"""
 <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:22px">
@@ -369,19 +397,20 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # ── KPIs ──────────────────────────────────────────────────────────────────────
-total_leads       = sum(v["total"] for v in data_fil.values())
-total_deliverable = sum(v["deliverable"] for v in data_fil.values())
-total_opened      = sum(v["opened"] for v in data_fil.values())
-total_replied     = sum(v["replied"] for v in data_fil.values())
+total_leads       = sum(v["total"] for v in data_view.values())
+total_deliverable = sum(v["deliverable"] for v in data_view.values())
+total_opened      = sum(v["opened"] for v in data_view.values())
+total_replied     = sum(v["replied"] for v in data_view.values())
 or_g = round(total_opened / total_deliverable * 100, 1) if total_deliverable else 0
 rr_g = round(total_replied / total_deliverable * 100, 1) if total_deliverable else 0
+filter_label = f" · Filtro: {STATE_LABELS.get(estado_sel, estado_sel)}" if estado_sel != "Todos" else ""
 
 for col, (val, label, sub) in zip(st.columns(5), [
     (f"{total_leads:,}",       "Total leads",   f"{total_leads - total_deliverable} bounces"),
     (f"{total_deliverable:,}", "Entregables",   f"{round(total_deliverable/total_leads*100,1) if total_leads else 0}% del total"),
     (f"{total_opened:,}",      "Abrieron",      f"OR {or_g}% sobre entregables"),
     (f"{total_replied:,}",     "Respondieron",  f"RR {rr_g}% sobre entregables"),
-    (f"{len(data_fil)}",       "Clusters",      " · ".join(data_fil.keys())),
+    (f"{len(data_view)}",      "Clusters",      " · ".join(data_view.keys()) + filter_label),
 ]):
     with col:
         st.markdown(f"""<div class="kpi-card">
@@ -394,7 +423,7 @@ st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
 
 # ── Gráficos ──────────────────────────────────────────────────────────────────
 g1, g2 = st.columns(2)
-tags_list = list(data_fil.keys())
+tags_list = list(data_view.keys())
 
 FONT = "Inter, sans-serif"
 BG   = "#161B22"
@@ -410,7 +439,7 @@ with g1:
         ("bounced", "Bounce",     "#4A1010", 1.0),
     ]
     for key, name, color, opacity in layers:
-        vals = [data_fil[t][key] for t in tags_list]
+        vals = [data_view[t][key] for t in tags_list]
         fig.add_trace(go.Bar(
             name=name, x=tags_list, y=vals,
             marker=dict(color=color, opacity=opacity, line=dict(width=0)),
@@ -418,7 +447,7 @@ with g1:
         ))
     # Anotación con total encima de cada barra
     for t in tags_list:
-        total = data_fil[t]["total"]
+        total = data_view[t]["total"]
         fig.add_annotation(
             x=t, y=total, text=f"<b>{total}</b>",
             showarrow=False, yanchor="bottom", yshift=6,
@@ -453,8 +482,8 @@ with g2:
     fig2 = go.Figure()
 
     for vals, name, color in [
-        ([data_fil[t]["or_deliverable"] for t in tags_list], "Open Rate",  "#1F6FEB"),
-        ([data_fil[t]["rr"]             for t in tags_list], "Reply Rate", "#238636"),
+        ([data_view[t]["or_deliverable"] for t in tags_list], "Open Rate",  "#1F6FEB"),
+        ([data_view[t]["rr"]             for t in tags_list], "Reply Rate", "#238636"),
     ]:
         fig2.add_trace(go.Bar(
             name=name, x=vals, y=tags_list, orientation="h",
@@ -466,8 +495,8 @@ with g2:
             cliponaxis=False,
         ))
 
-    max_val = max([data_fil[t]["or_deliverable"] for t in tags_list] +
-                  [data_fil[t]["rr"] for t in tags_list] + [1])
+    max_val = max([data_view[t]["or_deliverable"] for t in tags_list] +
+                  [data_view[t]["rr"] for t in tags_list] + [1])
 
     fig2.update_layout(
         plot_bgcolor=BG, paper_bgcolor=BG,
@@ -496,7 +525,7 @@ with g2:
 st.markdown('<div class="sec-title">Detalle por cluster</div>', unsafe_allow_html=True)
 BADGE = {"active": "badge-active", "paused": "badge-paused", "draft": "badge-draft"}
 
-for col, (tag, d) in zip(st.columns(len(data_fil)), data_fil.items()):
+for col, (tag, d) in zip(st.columns(max(len(data_view),1)), data_view.items()):
     bc = BADGE.get(d["status"], "badge-draft")
     with col:
         st.markdown(f"""<div class="cluster-card">
@@ -612,3 +641,80 @@ else:
                 </div>
               </div>
             </div>""", unsafe_allow_html=True)
+
+# ── Buscador de leads ─────────────────────────────────────────────────────────
+if buscar and len(buscar) >= 2:
+    st.markdown("<div style='height:20px'></div>", unsafe_allow_html=True)
+    st.markdown('<div class="sec-title">Resultados de búsqueda</div>', unsafe_allow_html=True)
+
+    q = buscar.lower()
+    # Construir índice de replies por email
+    replies_idx = defaultdict(list)
+    for r in replies_raw:
+        replies_idx[r.get("leadEmail","").lower()].append(r)
+
+    results = []
+    for tag, d in data_fil.items():
+        for l in d["leads"]:
+            nombre  = f"{l.get('firstName','')} {l.get('lastName','')}".strip()
+            email   = l.get("email","")
+            empresa = l.get("companyName","")
+            if q in nombre.lower() or q in email.lower() or q in empresa.lower():
+                results.append((tag, d["name"], l, replies_idx.get(email.lower(),[])))
+
+    if not results:
+        st.markdown(f'<div style="color:#8B949E;font-size:0.85rem">Sin resultados para "{buscar}".</div>',
+                    unsafe_allow_html=True)
+    else:
+        st.markdown(f"<div style='font-size:0.75rem;color:#8B949E;margin-bottom:10px'>{len(results)} resultado{'s' if len(results)>1 else ''}</div>",
+                    unsafe_allow_html=True)
+        for tag, seq_name, l, lead_replies in results[:15]:
+            nombre  = f"{l.get('firstName','')} {l.get('lastName','')}".strip() or l.get("email","")
+            email   = l.get("email","")
+            empresa = l.get("companyName","") or "—"
+            state   = l.get("state","")
+            score_val, score_lbl, score_color = SCORE_MAP.get(state, (0,"—","#6B7280"))
+            estado_lbl = STATE_LABELS.get(state, state)
+            li = l.get("linkedinUrl","")
+            li_btn = f'<a href="{li}" target="_blank" style="color:#58A6FF;font-size:0.72rem;text-decoration:none">LinkedIn →</a>' if li else ""
+
+            st.markdown(f"""
+            <div class="lead-card">
+              <div style="display:flex;justify-content:space-between;align-items:flex-start">
+                <div>
+                  <div class="lead-name">{nombre}</div>
+                  <div class="lead-email">{email}</div>
+                </div>
+                <span class="score-pill" style="background:{score_color}22;color:{score_color};border:1px solid {score_color}44">
+                  Score {score_val} · {score_lbl}
+                </span>
+              </div>
+              <div style="display:flex;gap:20px;margin-top:10px;flex-wrap:wrap">
+                <div style="font-size:0.75rem"><span style="color:#8B949E">Empresa </span><span style="color:#E6EDF3;font-weight:500">{empresa}</span></div>
+                <div style="font-size:0.75rem"><span style="color:#8B949E">Cluster </span><span style="color:#58A6FF;font-weight:600">{tag}</span></div>
+                <div style="font-size:0.75rem"><span style="color:#8B949E">Estado </span><span style="color:#E6EDF3">{estado_lbl}</span></div>
+                <div style="font-size:0.75rem"><span style="color:#8B949E">Secuencia </span><span style="color:#8B949E">{seq_name[:40]}</span></div>
+                {f'<div style="font-size:0.75rem">{li_btn}</div>' if li_btn else ''}
+              </div>
+            </div>""", unsafe_allow_html=True)
+
+            if lead_replies:
+                for rep in sorted(lead_replies, key=lambda x: x.get("createdAt",""), reverse=True)[:3]:
+                    rep_fecha   = rep.get("createdAt","")[:10]
+                    rep_preview = rep.get("messagePreview","").strip()
+                    rep_subject = rep.get("subject","")
+                    rep_ai      = rep.get("aiLeadInterestScore",0) or 0
+                    rep_ai_pct  = round(rep_ai*100)
+                    if rep_ai >= 0.7:   rc, rl = "#22C55E", "Muy interesado"
+                    elif rep_ai >= 0.4: rc, rl = "#F59E0B", "Interesado"
+                    else:               rc, rl = "#6B7280", "Poco interesado"
+                    st.markdown(f"""
+                    <div style="margin:-6px 0 8px 8px;background:#0D1117;border:1px solid #21262D;
+                                border-left:2px solid #238636;border-radius:6px;padding:10px 14px">
+                      <div style="display:flex;justify-content:space-between;margin-bottom:5px">
+                        <span style="font-size:0.68rem;color:#22C55E;font-weight:600">Respondió · {rep_fecha}</span>
+                        <span style="font-size:0.68rem;font-weight:700;color:{rc}">{rl} {rep_ai_pct}%</span>
+                      </div>
+                      {f'<div style="font-size:0.72rem;color:#8B949E;margin-bottom:4px">Asunto: <span style="color:#C9D1D9">{rep_subject}</span></div>' if rep_subject else ''}
+                      {f'<div style="font-size:0.8rem;color:#C9D1D9;line-height:1.5">{rep_preview}…</div>' if rep_preview else ''}
+                    </div>""", unsafe_allow_html=True)
