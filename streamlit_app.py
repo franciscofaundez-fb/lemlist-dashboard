@@ -20,7 +20,7 @@ try:
 except Exception:
     LEMLIST_KEY = "de60d9240b77ed27390a25893a847145"
 
-TAGS = ["SO005", "SO007", "SO009"]
+TAGS = ["SO005", "SO007", "SO009", "SO012"]
 
 STATE_LABELS = {
     "emailsOpened":  "Abrió",
@@ -452,48 +452,37 @@ with g2:
     st.markdown('<div class="sec-title">Open Rate & Reply Rate</div>', unsafe_allow_html=True)
     fig2 = go.Figure()
 
-    # Fondo de referencia (100%)
-    for t in tags_list:
-        fig2.add_shape(type="rect",
-            x0=0, x1=100, y0=tags_list.index(t)-0.4, y1=tags_list.index(t)+0.4,
-            fillcolor="#1E252E", line=dict(width=0), layer="below",
-        )
-
-    for vals, name, color, offset in [
-        ([data_fil[t]["or_deliverable"] for t in tags_list], "Open Rate",  "#1F6FEB", -0.22),
-        ([data_fil[t]["rr"]             for t in tags_list], "Reply Rate", "#238636",  0.22),
+    for vals, name, color in [
+        ([data_fil[t]["or_deliverable"] for t in tags_list], "Open Rate",  "#1F6FEB"),
+        ([data_fil[t]["rr"]             for t in tags_list], "Reply Rate", "#238636"),
     ]:
         fig2.add_trace(go.Bar(
             name=name, x=vals, y=tags_list, orientation="h",
-            marker=dict(color=color, line=dict(width=0), cornerradius=3),
+            marker=dict(color=color, line=dict(width=0)),
             hovertemplate=f"<b>%{{y}}</b><br>{name}: <b>%{{x}}%</b><extra></extra>",
-            width=0.38,
-            offset=offset - 0.19,
+            text=[f"{v}%" for v in vals],
+            textposition="outside",
+            textfont=dict(size=11, color=color, family=FONT),
+            cliponaxis=False,
         ))
-        # Anotación con % al final de cada barra
-        for i, (t, v) in enumerate(zip(tags_list, vals)):
-            fig2.add_annotation(
-                x=v, y=i + (offset * 2),
-                text=f"<b>{v}%</b>",
-                showarrow=False, xanchor="left", xshift=6,
-                font=dict(size=11, color=color, family=FONT),
-            )
+
+    max_val = max([data_fil[t]["or_deliverable"] for t in tags_list] +
+                  [data_fil[t]["rr"] for t in tags_list] + [1])
 
     fig2.update_layout(
         plot_bgcolor=BG, paper_bgcolor=BG,
         font=dict(family=FONT, size=11),
-        margin=dict(l=16, r=64, t=32, b=64), height=290,
-        barmode="overlay",
+        margin=dict(l=16, r=72, t=32, b=64), height=290,
+        barmode="group", bargap=0.3, bargroupgap=0.1,
         showlegend=True,
         legend=dict(
             orientation="h", y=-0.28, x=0,
             bgcolor="rgba(0,0,0,0)", font=dict(size=10, color="#8B949E"),
-            itemsizing="constant",
         ),
         hoverlabel=HOVER,
         xaxis=dict(
-            showgrid=False, zeroline=False, showline=False,
-            range=[0, 108], showticklabels=False,
+            showgrid=True, gridcolor="#1E252E", zeroline=False, showline=False,
+            range=[0, max_val * 1.35], showticklabels=False,
         ),
         yaxis=dict(
             showgrid=False, showline=False,
@@ -553,8 +542,6 @@ st.markdown('<div class="sec-title">Leads conectados</div>', unsafe_allow_html=T
 # Session state para acordeón
 if "open_cluster" not in st.session_state:
     st.session_state.open_cluster = {}
-if "open_lead" not in st.session_state:
-    st.session_state.open_lead = {}
 
 if not replies_by_tag:
     st.markdown('<div style="color:#8B949E;font-size:0.85rem;padding:12px 0">No hay respuestas aún.</div>',
@@ -593,16 +580,13 @@ else:
             ai_pct     = round(ai_raw * 100)
             is_turn    = not r.get("bot", False)
             contact_id = r.get("contactId","")
-            lead_key   = f"{tag}_{contact_id}"
-            lead_open  = st.session_state.open_lead.get(lead_key, False)
-
             if ai_raw >= 0.7:   ai_color, ai_lbl = "#22C55E", "Muy interesado"
             elif ai_raw >= 0.4: ai_color, ai_lbl = "#F59E0B", "Interesado"
             else:               ai_color, ai_lbl = "#6B7280", "Poco interesado"
 
             turn_badge = '<span class="your-turn-badge">Tu turno</span>' if is_turn else ""
             border     = "border-left:3px solid #238636;" if is_turn else ""
-            arrow_lead = "▼" if lead_open else "▶"
+            preview    = r.get("messagePreview","").strip()
 
             st.markdown(f"""
             <div class="reply-card" style="margin-left:16px;{border}">
@@ -617,54 +601,14 @@ else:
                   <span style="font-size:0.68rem;color:#484F58">{fecha}</span>
                 </div>
               </div>
-              <div style="margin-top:10px;display:flex;justify-content:space-between;align-items:center">
-                <div style="flex:1;margin-right:16px">
-                  <div style="display:flex;justify-content:space-between;margin-bottom:3px">
-                    <span style="font-size:0.67rem;color:#8B949E">Interés IA</span>
-                    <span style="font-size:0.67rem;font-weight:700;color:{ai_color}">{ai_lbl} · {ai_pct}%</span>
-                  </div>
-                  <div class="ai-score-bar">
-                    <div style="height:4px;border-radius:4px;width:{ai_pct}%;background:{ai_color}"></div>
-                  </div>
+              {f'<div class="reply-preview">{preview}…</div>' if preview else ''}
+              <div style="margin-top:10px">
+                <div style="display:flex;justify-content:space-between;margin-bottom:3px">
+                  <span style="font-size:0.67rem;color:#8B949E">Interés IA</span>
+                  <span style="font-size:0.67rem;font-weight:700;color:{ai_color}">{ai_lbl} · {ai_pct}%</span>
+                </div>
+                <div class="ai-score-bar">
+                  <div style="height:4px;border-radius:4px;width:{ai_pct}%;background:{ai_color}"></div>
                 </div>
               </div>
             </div>""", unsafe_allow_html=True)
-
-            if st.button(f"{arrow_lead} Ver conversación completa", key=f"lead_{lead_key}"):
-                st.session_state.open_lead[lead_key] = not lead_open
-                st.rerun()
-
-            if lead_open and contact_id:
-                with st.spinner("Cargando conversación..."):
-                    hilo = fetch_conversation(contact_id)
-
-                if hilo:
-                    for msg in hilo:
-                        msg_type = msg.get("type","")
-                        msg_fecha = msg.get("createdAt","")[:10] if msg.get("createdAt") else ""
-                        msg_html  = msg.get("message","")
-                        msg_text  = strip_html(msg_html)
-                        msg_subj  = msg.get("subject","")
-
-                        if msg_type == "emailsReplied":
-                            bg, label_msg, border_msg = "#0D1117", f"Respondió el {msg_fecha}", "2px solid #238636"
-                        elif msg_type in ("emailsSent", "emailsOpened"):
-                            bg, label_msg, border_msg = "#161B22", f"Enviado el {msg_fecha}", "2px solid #1F6FEB"
-                        else:
-                            continue
-
-                        if not msg_text:
-                            continue
-
-                        st.markdown(f"""
-                        <div style="margin:4px 0 4px 24px;background:{bg};border-radius:8px;
-                                    padding:12px 16px;border-left:{border_msg}">
-                          <div style="font-size:0.68rem;color:#8B949E;margin-bottom:6px;font-weight:600">
-                            {label_msg}{f' · {msg_subj}' if msg_subj else ''}
-                          </div>
-                          <div style="font-size:0.82rem;color:#C9D1D9;line-height:1.6;
-                                      white-space:pre-wrap">{msg_text[:1500]}{'…' if len(msg_text)>1500 else ''}</div>
-                        </div>""", unsafe_allow_html=True)
-                else:
-                    st.markdown('<div style="font-size:0.78rem;color:#484F58;margin-left:24px">No se encontró conversación.</div>',
-                                unsafe_allow_html=True)
