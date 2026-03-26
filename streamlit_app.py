@@ -221,6 +221,24 @@ st.markdown("""
 
 # ── Lemlist API ──────────────────────────────────────────────────────────────
 @st.cache_data(ttl=300, show_spinner=False)
+def fetch_conversation(contact_id):
+    """Obtiene el hilo completo de un contacto."""
+    auth = base64.b64encode(f":{LEMLIST_KEY}".encode()).decode()
+    hdr  = {"Authorization": f"Basic {auth}", "User-Agent": "Mozilla/5.0"}
+    req  = urllib.request.Request(
+        f"https://api.lemlist.com/api/inbox/{contact_id}", headers=hdr)
+    try:
+        return json.loads(urllib.request.urlopen(req, timeout=20).read())
+    except:
+        return []
+
+def strip_html(html):
+    text = re.sub(r'<br\s*/?>', '\n', html or '')
+    text = re.sub(r'<[^>]+>', '', text)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
+
+@st.cache_data(ttl=300, show_spinner=False)
 def fetch_replies():
     auth = base64.b64encode(f":{LEMLIST_KEY}".encode()).decode()
     hdr  = {"Authorization": f"Basic {auth}", "User-Agent": "Mozilla/5.0"}
@@ -532,6 +550,12 @@ for r in replies_raw:
 
 st.markdown('<div class="sec-title">Leads conectados</div>', unsafe_allow_html=True)
 
+# Session state para acordeón
+if "open_cluster" not in st.session_state:
+    st.session_state.open_cluster = {}
+if "open_lead" not in st.session_state:
+    st.session_state.open_lead = {}
+
 if not replies_by_tag:
     st.markdown('<div style="color:#8B949E;font-size:0.85rem;padding:12px 0">No hay respuestas aún.</div>',
                 unsafe_allow_html=True)
@@ -541,60 +565,106 @@ else:
         if not replies:
             continue
         your_turn_n = sum(1 for r in replies if not r.get("bot", False))
-        label = f"{tag}  ·  {len(replies)} leads conectados"
-        if your_turn_n:
-            label += f"  ·  {your_turn_n} tu turno"
+        is_open = st.session_state.open_cluster.get(tag, False)
 
-        with st.expander(label, expanded=False):
-            for r in sorted(replies, key=lambda x: x.get("createdAt",""), reverse=True):
-                nombre  = f"{r.get('leadFirstName','')} {r.get('leadLastName','')}".strip() or r.get("leadEmail","")
-                empresa = r.get("leadCompanyName","")
-                email   = r.get("leadEmail","")
-                preview = r.get("messagePreview","").strip()
-                subject = r.get("subject","")
-                fecha   = r.get("createdAt","")[:10] if r.get("createdAt") else ""
-                ai_raw  = r.get("aiLeadInterestScore", 0) or 0
-                ai_pct  = round(ai_raw * 100)
-                is_turn = not r.get("bot", False)
-                contact_id = r.get("contactId","")
-                lemlist_url = f"https://app.lemlist.com/inbox" + (f"?contactId={contact_id}" if contact_id else "")
+        # Header del cluster como botón
+        col_btn, col_info = st.columns([1, 8])
+        with col_btn:
+            arrow = "▼" if is_open else "▶"
+            if st.button(f"{arrow} {tag}", key=f"cluster_{tag}"):
+                st.session_state.open_cluster[tag] = not is_open
+                st.rerun()
+        with col_info:
+            turn_txt = f"  ·  <span style='color:#22C55E'>{your_turn_n} tu turno</span>" if your_turn_n else ""
+            st.markdown(f"<div style='padding-top:6px;font-size:0.82rem;color:#8B949E'>{len(replies)} leads conectados{turn_txt}</div>",
+                        unsafe_allow_html=True)
 
-                if ai_raw >= 0.7:   ai_color, ai_lbl = "#22C55E", "Muy interesado"
-                elif ai_raw >= 0.4: ai_color, ai_lbl = "#F59E0B", "Interesado"
-                else:               ai_color, ai_lbl = "#6B7280", "Poco interesado"
+        if not is_open:
+            continue
 
-                turn_badge = '<span class="your-turn-badge">Tu turno</span>' if is_turn else ""
-                border = "border-left:3px solid #238636;" if is_turn else ""
+        # Leads del cluster
+        for r in sorted(replies, key=lambda x: x.get("createdAt",""), reverse=True):
+            nombre     = f"{r.get('leadFirstName','')} {r.get('leadLastName','')}".strip() or r.get("leadEmail","")
+            empresa    = r.get("leadCompanyName","")
+            email      = r.get("leadEmail","")
+            subject    = r.get("subject","")
+            fecha      = r.get("createdAt","")[:10] if r.get("createdAt") else ""
+            ai_raw     = r.get("aiLeadInterestScore", 0) or 0
+            ai_pct     = round(ai_raw * 100)
+            is_turn    = not r.get("bot", False)
+            contact_id = r.get("contactId","")
+            lead_key   = f"{tag}_{contact_id}"
+            lead_open  = st.session_state.open_lead.get(lead_key, False)
 
-                st.markdown(f"""
-                <div class="reply-card" style="{border}">
-                  <div style="display:flex;justify-content:space-between;align-items:flex-start">
-                    <div>
-                      <div class="reply-name">{nombre}</div>
-                      <div class="reply-company">{empresa}{(' · ' + email) if empresa else email}</div>
-                    </div>
-                    <div style="display:flex;flex-direction:column;align-items:flex-end;gap:5px">
-                      {turn_badge}
-                      <span style="font-size:0.68rem;color:#484F58">{fecha}</span>
-                    </div>
+            if ai_raw >= 0.7:   ai_color, ai_lbl = "#22C55E", "Muy interesado"
+            elif ai_raw >= 0.4: ai_color, ai_lbl = "#F59E0B", "Interesado"
+            else:               ai_color, ai_lbl = "#6B7280", "Poco interesado"
+
+            turn_badge = '<span class="your-turn-badge">Tu turno</span>' if is_turn else ""
+            border     = "border-left:3px solid #238636;" if is_turn else ""
+            arrow_lead = "▼" if lead_open else "▶"
+
+            st.markdown(f"""
+            <div class="reply-card" style="margin-left:16px;{border}">
+              <div style="display:flex;justify-content:space-between;align-items:flex-start">
+                <div>
+                  <div class="reply-name">{nombre}</div>
+                  <div class="reply-company">{empresa}{(' · ' + email) if empresa else email}</div>
+                  {f'<div style="font-size:0.7rem;color:#8B949E;margin-top:4px">Asunto: <span style="color:#C9D1D9">{subject}</span></div>' if subject else ''}
+                </div>
+                <div style="display:flex;flex-direction:column;align-items:flex-end;gap:5px">
+                  {turn_badge}
+                  <span style="font-size:0.68rem;color:#484F58">{fecha}</span>
+                </div>
+              </div>
+              <div style="margin-top:10px;display:flex;justify-content:space-between;align-items:center">
+                <div style="flex:1;margin-right:16px">
+                  <div style="display:flex;justify-content:space-between;margin-bottom:3px">
+                    <span style="font-size:0.67rem;color:#8B949E">Interés IA</span>
+                    <span style="font-size:0.67rem;font-weight:700;color:{ai_color}">{ai_lbl} · {ai_pct}%</span>
                   </div>
-                  {f'<div style="font-size:0.7rem;color:#8B949E;margin-top:8px">Asunto: <span style="color:#C9D1D9">{subject}</span></div>' if subject else ''}
-                  {f'<div class="reply-preview">{preview}…</div>' if preview else ''}
-                  <div style="margin-top:10px;display:flex;justify-content:space-between;align-items:center">
-                    <div style="flex:1;margin-right:16px">
-                      <div style="display:flex;justify-content:space-between;margin-bottom:3px">
-                        <span style="font-size:0.67rem;color:#8B949E">Interés IA</span>
-                        <span style="font-size:0.67rem;font-weight:700;color:{ai_color}">{ai_lbl} · {ai_pct}%</span>
-                      </div>
-                      <div class="ai-score-bar">
-                        <div style="height:4px;border-radius:4px;width:{ai_pct}%;background:{ai_color}"></div>
-                      </div>
-                    </div>
-                    <a href="{lemlist_url}" target="_blank"
-                       style="font-size:0.72rem;color:#58A6FF;text-decoration:none;
-                              background:rgba(31,111,235,0.1);border:1px solid rgba(31,111,235,0.2);
-                              padding:3px 10px;border-radius:4px;white-space:nowrap">
-                      Ver conversación →
-                    </a>
+                  <div class="ai-score-bar">
+                    <div style="height:4px;border-radius:4px;width:{ai_pct}%;background:{ai_color}"></div>
                   </div>
-                </div>""", unsafe_allow_html=True)
+                </div>
+              </div>
+            </div>""", unsafe_allow_html=True)
+
+            if st.button(f"{arrow_lead} Ver conversación completa", key=f"lead_{lead_key}"):
+                st.session_state.open_lead[lead_key] = not lead_open
+                st.rerun()
+
+            if lead_open and contact_id:
+                with st.spinner("Cargando conversación..."):
+                    hilo = fetch_conversation(contact_id)
+
+                if hilo:
+                    for msg in hilo:
+                        msg_type = msg.get("type","")
+                        msg_fecha = msg.get("createdAt","")[:10] if msg.get("createdAt") else ""
+                        msg_html  = msg.get("message","")
+                        msg_text  = strip_html(msg_html)
+                        msg_subj  = msg.get("subject","")
+
+                        if msg_type == "emailsReplied":
+                            bg, label_msg, border_msg = "#0D1117", f"Respondió el {msg_fecha}", "2px solid #238636"
+                        elif msg_type in ("emailsSent", "emailsOpened"):
+                            bg, label_msg, border_msg = "#161B22", f"Enviado el {msg_fecha}", "2px solid #1F6FEB"
+                        else:
+                            continue
+
+                        if not msg_text:
+                            continue
+
+                        st.markdown(f"""
+                        <div style="margin:4px 0 4px 24px;background:{bg};border-radius:8px;
+                                    padding:12px 16px;border-left:{border_msg}">
+                          <div style="font-size:0.68rem;color:#8B949E;margin-bottom:6px;font-weight:600">
+                            {label_msg}{f' · {msg_subj}' if msg_subj else ''}
+                          </div>
+                          <div style="font-size:0.82rem;color:#C9D1D9;line-height:1.6;
+                                      white-space:pre-wrap">{msg_text[:1500]}{'…' if len(msg_text)>1500 else ''}</div>
+                        </div>""", unsafe_allow_html=True)
+                else:
+                    st.markdown('<div style="font-size:0.78rem;color:#484F58;margin-left:24px">No se encontró conversación.</div>',
+                                unsafe_allow_html=True)
