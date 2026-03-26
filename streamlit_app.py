@@ -521,22 +521,15 @@ for col, (tag, d) in zip(st.columns(len(data_fil)), data_fil.items()):
 
 st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
 
-# ── Inbox: leads conectados ───────────────────────────────────────────────────
+# ── Leads conectados ──────────────────────────────────────────────────────────
 replies_raw = fetch_replies()
 
-# Índice de replies por email para la sección de conversación
-replies_by_email = defaultdict(list)
-for r in replies_raw:
-    replies_by_email[r.get("leadEmail", "").lower()].append(r)
-
-# Agrupar por cluster
 replies_by_tag = defaultdict(list)
 for r in replies_raw:
     m = re.search(r"(SO\d{3,})", r.get("campaignName", ""))
     if m and m.group(1) in tags_sel:
         replies_by_tag[m.group(1)].append(r)
 
-st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 st.markdown('<div class="sec-title">Leads conectados</div>', unsafe_allow_html=True)
 
 if not replies_by_tag:
@@ -548,158 +541,60 @@ else:
         if not replies:
             continue
         your_turn_n = sum(1 for r in replies if not r.get("bot", False))
+        label = f"{tag}  ·  {len(replies)} leads conectados"
+        if your_turn_n:
+            label += f"  ·  {your_turn_n} tu turno"
 
-        st.markdown(f"""
-        <div style="display:flex;align-items:center;gap:12px;margin:16px 0 8px">
-          <span style="font-size:0.72rem;font-weight:700;color:#58A6FF;
-                       background:rgba(31,111,235,0.1);border:1px solid rgba(31,111,235,0.2);
-                       padding:2px 10px;border-radius:4px">{tag}</span>
-          <span style="font-size:0.78rem;color:#8B949E">{len(replies)} leads conectados</span>
-          {f'<span style="font-size:0.72rem;color:#22C55E;background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.2);padding:1px 8px;border-radius:4px">{your_turn_n} tu turno</span>' if your_turn_n else ''}
-        </div>""", unsafe_allow_html=True)
+        with st.expander(label, expanded=False):
+            for r in sorted(replies, key=lambda x: x.get("createdAt",""), reverse=True):
+                nombre  = f"{r.get('leadFirstName','')} {r.get('leadLastName','')}".strip() or r.get("leadEmail","")
+                empresa = r.get("leadCompanyName","")
+                email   = r.get("leadEmail","")
+                preview = r.get("messagePreview","").strip()
+                subject = r.get("subject","")
+                fecha   = r.get("createdAt","")[:10] if r.get("createdAt") else ""
+                ai_raw  = r.get("aiLeadInterestScore", 0) or 0
+                ai_pct  = round(ai_raw * 100)
+                is_turn = not r.get("bot", False)
+                contact_id = r.get("contactId","")
+                lemlist_url = f"https://app.lemlist.com/inbox" + (f"?contactId={contact_id}" if contact_id else "")
 
-        for r in sorted(replies, key=lambda x: x.get("createdAt",""), reverse=True):
-            nombre  = f"{r.get('leadFirstName','')} {r.get('leadLastName','')}".strip() or r.get("leadEmail","")
-            empresa = r.get("leadCompanyName", "")
-            email   = r.get("leadEmail", "")
-            preview = r.get("messagePreview", "").strip()
-            subject = r.get("subject", "")
-            fecha   = r.get("createdAt", "")[:10] if r.get("createdAt") else ""
-            ai_raw  = r.get("aiLeadInterestScore", 0) or 0
-            ai_pct  = round(ai_raw * 100)
-            is_turn = not r.get("bot", False)
-            if ai_raw >= 0.7:   ai_color, ai_lbl = "#22C55E", "Muy interesado"
-            elif ai_raw >= 0.4: ai_color, ai_lbl = "#F59E0B", "Interesado"
-            else:               ai_color, ai_lbl = "#6B7280", "Poco interesado"
+                if ai_raw >= 0.7:   ai_color, ai_lbl = "#22C55E", "Muy interesado"
+                elif ai_raw >= 0.4: ai_color, ai_lbl = "#F59E0B", "Interesado"
+                else:               ai_color, ai_lbl = "#6B7280", "Poco interesado"
 
-            turn_badge = '<span class="your-turn-badge">Tu turno</span>' if is_turn else ""
-            border = "border-left:3px solid #238636;" if is_turn else ""
-
-            st.markdown(f"""
-            <div class="reply-card" style="{border}">
-              <div style="display:flex;justify-content:space-between;align-items:flex-start">
-                <div>
-                  <div class="reply-name">{nombre}</div>
-                  <div class="reply-company">{empresa}{(' · ' + email) if empresa else email}</div>
-                </div>
-                <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
-                  {turn_badge}
-                  <span style="font-size:0.68rem;color:#484F58">{fecha}</span>
-                </div>
-              </div>
-              {f'<div style="font-size:0.7rem;color:#8B949E;margin-top:8px">Asunto: <span style="color:#C9D1D9">{subject}</span></div>' if subject else ''}
-              {f'<div class="reply-preview">{preview}…</div>' if preview else ''}
-              <div style="margin-top:10px">
-                <div style="display:flex;justify-content:space-between;margin-bottom:3px">
-                  <span style="font-size:0.67rem;color:#8B949E">Interés IA</span>
-                  <span style="font-size:0.67rem;font-weight:700;color:{ai_color}">{ai_lbl} · {ai_pct}%</span>
-                </div>
-                <div class="ai-score-bar">
-                  <div style="height:4px;border-radius:4px;width:{ai_pct}%;background:{ai_color}"></div>
-                </div>
-              </div>
-            </div>""", unsafe_allow_html=True)
-
-st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-
-# ── Todos los leads ───────────────────────────────────────────────────────────
-st.markdown('<div class="sec-title">Todos los leads</div>', unsafe_allow_html=True)
-
-# Armar lista completa
-rows = []
-for tag, d in data_fil.items():
-    for l in d["leads"]:
-        state = l.get("state", "")
-        score_val, score_label, score_color = SCORE_MAP.get(state, (0, "—", "#6B7280"))
-        email = l.get("email", "")
-        lead_replies = replies_by_email.get(email.lower(), [])
-        rows.append({
-            "Cluster":      tag,
-            "Secuencia":    d["name"],
-            "Nombre":       f"{l.get('firstName', '')} {l.get('lastName', '')}".strip(),
-            "Email":        email,
-            "Empresa":      l.get("companyName", ""),
-            "Estado":       state,
-            "estado_label": STATE_LABELS.get(state, state),
-            "score":        score_val,
-            "score_label":  score_label,
-            "score_color":  score_color,
-            "LinkedIn":     l.get("linkedinUrl", ""),
-            "replies":      lead_replies,
-        })
-
-# Filtros
-filtered = rows[:]
-if estado_sel != "Todos":
-    filtered = [r for r in filtered if r["Estado"] == estado_sel]
-if buscar and len(buscar) >= 2:
-    q = buscar.lower()
-    filtered = [r for r in filtered if
-                q in r["Nombre"].lower() or q in r["Email"].lower() or q in r["Empresa"].lower()]
-
-st.markdown(f"<div style='font-size:0.75rem;color:#8B949E;margin-bottom:10px'>{len(filtered)} leads</div>",
-            unsafe_allow_html=True)
-
-# Mostrar leads como expanders con conversación
-for r in filtered[:50]:
-    has_replies = bool(r["replies"])
-    icon = "💬 " if has_replies else ""
-    title = f"{icon}{r['Nombre'] or r['Email']}  ·  {r['Empresa'] or '—'}  ·  {r['Cluster']}"
-
-    with st.expander(title, expanded=False):
-        # Info del lead
-        li_btn = f'<a href="{r["LinkedIn"]}" target="_blank" style="color:#58A6FF;font-size:0.75rem;text-decoration:none">Ver LinkedIn →</a>' if r["LinkedIn"] else ""
-        st.markdown(f"""
-        <div style="display:flex;gap:32px;flex-wrap:wrap;padding:4px 0 12px;border-bottom:1px solid #21262D">
-          <div><span style="font-size:0.68rem;color:#8B949E;text-transform:uppercase;letter-spacing:0.08em">Email</span>
-               <div style="font-size:0.82rem;color:#E6EDF3;margin-top:2px">{r['Email'] or '—'}</div></div>
-          <div><span style="font-size:0.68rem;color:#8B949E;text-transform:uppercase;letter-spacing:0.08em">Empresa</span>
-               <div style="font-size:0.82rem;color:#E6EDF3;margin-top:2px">{r['Empresa'] or '—'}</div></div>
-          <div><span style="font-size:0.68rem;color:#8B949E;text-transform:uppercase;letter-spacing:0.08em">Estado</span>
-               <div style="font-size:0.82rem;color:#E6EDF3;margin-top:2px">{r['estado_label']}</div></div>
-          <div><span style="font-size:0.68rem;color:#8B949E;text-transform:uppercase;letter-spacing:0.08em">Lead Score</span>
-               <div style="font-size:0.82rem;font-weight:700;color:{r['score_color']};margin-top:2px">{r['score']} · {r['score_label']}</div></div>
-          <div><span style="font-size:0.68rem;color:#8B949E;text-transform:uppercase;letter-spacing:0.08em">Secuencia</span>
-               <div style="font-size:0.78rem;color:#8B949E;margin-top:2px">{r['Secuencia'][:45]}</div></div>
-          {f'<div style="display:flex;align-items:flex-end">{li_btn}</div>' if li_btn else ''}
-        </div>""", unsafe_allow_html=True)
-
-        # Conversación
-        if has_replies:
-            st.markdown('<div style="font-size:0.68rem;color:#8B949E;text-transform:uppercase;letter-spacing:0.08em;margin:12px 0 8px">Conversación</div>',
-                        unsafe_allow_html=True)
-            for rep in sorted(r["replies"], key=lambda x: x.get("createdAt",""), reverse=True):
-                rep_fecha   = rep.get("createdAt","")[:10]
-                rep_subject = rep.get("subject","")
-                rep_preview = rep.get("messagePreview","").strip()
-                rep_ai      = rep.get("aiLeadInterestScore", 0) or 0
-                rep_ai_pct  = round(rep_ai * 100)
-                if rep_ai >= 0.7:   rc, rl = "#22C55E", "Muy interesado"
-                elif rep_ai >= 0.4: rc, rl = "#F59E0B", "Interesado"
-                else:               rc, rl = "#6B7280", "Poco interesado"
+                turn_badge = '<span class="your-turn-badge">Tu turno</span>' if is_turn else ""
+                border = "border-left:3px solid #238636;" if is_turn else ""
 
                 st.markdown(f"""
-                <div style="background:#0D1117;border:1px solid #21262D;border-radius:8px;padding:12px 14px;margin-bottom:6px">
-                  <div style="display:flex;justify-content:space-between;margin-bottom:6px">
-                    <span style="font-size:0.72rem;color:#8B949E">Respondió · {rep_fecha}</span>
-                    <span style="font-size:0.72rem;font-weight:700;color:{rc}">{rl} ({rep_ai_pct}%)</span>
+                <div class="reply-card" style="{border}">
+                  <div style="display:flex;justify-content:space-between;align-items:flex-start">
+                    <div>
+                      <div class="reply-name">{nombre}</div>
+                      <div class="reply-company">{empresa}{(' · ' + email) if empresa else email}</div>
+                    </div>
+                    <div style="display:flex;flex-direction:column;align-items:flex-end;gap:5px">
+                      {turn_badge}
+                      <span style="font-size:0.68rem;color:#484F58">{fecha}</span>
+                    </div>
                   </div>
-                  {f'<div style="font-size:0.75rem;color:#8B949E;margin-bottom:4px">Asunto: <span style="color:#C9D1D9">{rep_subject}</span></div>' if rep_subject else ''}
-                  {f'<div style="font-size:0.8rem;color:#C9D1D9;line-height:1.5;background:#161B22;border-radius:6px;padding:8px 12px;border-left:2px solid #30363D">{rep_preview}…</div>' if rep_preview else ''}
+                  {f'<div style="font-size:0.7rem;color:#8B949E;margin-top:8px">Asunto: <span style="color:#C9D1D9">{subject}</span></div>' if subject else ''}
+                  {f'<div class="reply-preview">{preview}…</div>' if preview else ''}
+                  <div style="margin-top:10px;display:flex;justify-content:space-between;align-items:center">
+                    <div style="flex:1;margin-right:16px">
+                      <div style="display:flex;justify-content:space-between;margin-bottom:3px">
+                        <span style="font-size:0.67rem;color:#8B949E">Interés IA</span>
+                        <span style="font-size:0.67rem;font-weight:700;color:{ai_color}">{ai_lbl} · {ai_pct}%</span>
+                      </div>
+                      <div class="ai-score-bar">
+                        <div style="height:4px;border-radius:4px;width:{ai_pct}%;background:{ai_color}"></div>
+                      </div>
+                    </div>
+                    <a href="{lemlist_url}" target="_blank"
+                       style="font-size:0.72rem;color:#58A6FF;text-decoration:none;
+                              background:rgba(31,111,235,0.1);border:1px solid rgba(31,111,235,0.2);
+                              padding:3px 10px;border-radius:4px;white-space:nowrap">
+                      Ver conversación →
+                    </a>
+                  </div>
                 </div>""", unsafe_allow_html=True)
-        else:
-            st.markdown('<div style="font-size:0.78rem;color:#484F58;padding:8px 0">Sin respuestas registradas.</div>',
-                        unsafe_allow_html=True)
-
-if len(filtered) > 50:
-    st.markdown(f'<div style="font-size:0.75rem;color:#8B949E;margin-top:8px">Mostrando 50 de {len(filtered)} leads. Usa el buscador para filtrar.</div>',
-                unsafe_allow_html=True)
-
-buf = io.StringIO()
-writer = csv.DictWriter(buf, fieldnames=["Cluster","Nombre","Email","Empresa","Estado","score_label","LinkedIn"])
-writer.writeheader()
-writer.writerows([{"Cluster":r["Cluster"],"Nombre":r["Nombre"],"Email":r["Email"],
-                   "Empresa":r["Empresa"],"Estado":r["estado_label"],
-                   "score_label":r["score_label"],"LinkedIn":r["LinkedIn"]} for r in filtered])
-st.download_button("Descargar CSV", buf.getvalue().encode("utf-8"),
-                   f"leads_{datetime.now().strftime('%Y%m%d')}.csv", "text/csv")
